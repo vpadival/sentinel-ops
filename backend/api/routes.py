@@ -126,12 +126,13 @@ async def get_job(job_id: str) -> JobStatusResponse:
     state = job_store.get(job_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    fact_sheet = state.get("fact_sheet")
     return JobStatusResponse(
         job_id      = job_id,
         status      = state.get("job_status", JobStatus.PENDING),
         error       = state.get("error"),
         messages    = state.get("messages", []),
-        fact_sheet  = dict(state["fact_sheet"]) if state.get("fact_sheet") else None,
+        fact_sheet  = dict(fact_sheet) if fact_sheet else None,
         trace_spans = state.get("trace_spans", []),
     )
 

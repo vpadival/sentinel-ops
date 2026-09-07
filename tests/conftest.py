@@ -13,6 +13,6 @@ for key in (
 
 
 @pytest.fixture(autouse=True)
-def isolate_clients(monkeypatch):
+def isolate_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.core import llm
     monkeypatch.setattr(llm, "_client", None)

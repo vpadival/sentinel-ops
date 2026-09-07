@@ -11,7 +11,7 @@ import re
 import json
 import time
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, cast
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -173,7 +173,7 @@ def call_llm_json(
             parsed = json.loads(clean)
             if not isinstance(parsed, dict):
                 raise ValueError("Expected a JSON object")
-            return parsed
+            return cast(Dict[str, Any], parsed)
         except (json.JSONDecodeError, ValueError) as exc:
             last_err = exc
             logger.warning(f"JSON parse failed (attempt {attempt+1}): {exc}. Retrying with stricter prompt.")

@@ -47,24 +47,31 @@ def route_after_analyst(state: SentinelState) -> str:
     return "reporter"
 
 
+def route_after_supervisor(state: SentinelState) -> str:
+    """Stop immediately when the supervisor rejects the input."""
+    return END if state.get("job_status") == JobStatus.FAILED else "scout"
+
+
 def _build_graph() -> Any:
     """
     Constructs and compiles the Sentinel-Ops LangGraph pipeline.
-    Returns a CompiledStateGraph (typed as Any because langgraph lacks stubs).
+    Returns a CompiledStateGraph behind the existing dynamic graph interface.
     """
     graph = StateGraph(SentinelState)
 
     # ── Register nodes ────────────────────────────────────────────────────
-    graph.add_node("supervisor", supervisor_node)
-    graph.add_node("scout",      scout_node)
-    graph.add_node("analyst",    analyst_node)
-    graph.add_node("reporter",   reporter_node)
+    # LangGraph's unused cache-policy overloads contain unresolved type parameters.
+    # Suppress only that upstream member diagnostic, retaining argument checks.
+    graph.add_node("supervisor", supervisor_node)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("scout",      scout_node)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("analyst",    analyst_node)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("reporter",   reporter_node)  # pyright: ignore[reportUnknownMemberType]
 
     # ── Wire edges ────────────────────────────────────────────────────────
     graph.set_entry_point("supervisor")
     graph.add_conditional_edges(
         "supervisor",
-        lambda state: END if state.get("job_status") == JobStatus.FAILED else "scout",
+        route_after_supervisor,
         {END: END, "scout": "scout"},
     )
     graph.add_edge("scout",      "analyst")
@@ -80,7 +87,8 @@ def _build_graph() -> Any:
 
     graph.add_edge("reporter", END)
 
-    return graph.compile()
+    # The optional checkpointer/cache parameters have the same upstream typing gap.
+    return graph.compile()  # pyright: ignore[reportUnknownMemberType]
 
 
 def get_graph() -> Any:
