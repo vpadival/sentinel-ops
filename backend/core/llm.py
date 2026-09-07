@@ -96,7 +96,12 @@ def clean_json(raw: str) -> str:
                     break
 
     # Fix trailing commas before } or ]  (common LLM mistake)
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    # Match strings first so payload text such as "value,}" stays intact.
+    text = re.sub(
+        r'"(?:\\.|[^"\\])*"|,\s*(?=[}\]])',
+        lambda match: match.group(0) if match.group(0).startswith('"') else '',
+        text,
+    )
 
     return text.strip()
 
@@ -165,8 +170,11 @@ def call_llm_json(
         try:
             raw    = call_llm(system, user, temperature, max_tokens)
             clean  = clean_json(raw)
-            return json.loads(clean)
-        except json.JSONDecodeError as exc:
+            parsed = json.loads(clean)
+            if not isinstance(parsed, dict):
+                raise ValueError("Expected a JSON object")
+            return parsed
+        except (json.JSONDecodeError, ValueError) as exc:
             last_err = exc
             logger.warning(f"JSON parse failed (attempt {attempt+1}): {exc}. Retrying with stricter prompt.")
             # On retry, append a stronger instruction

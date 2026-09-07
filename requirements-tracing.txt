@@ -1,0 +1,4 @@
+# Optional tracing SDK. Its grpcio-tools dependency may require a C++
+# toolchain on Python versions without a compatible prebuilt wheel.
+-r requirements.txt
+omium

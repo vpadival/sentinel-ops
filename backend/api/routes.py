@@ -157,7 +157,7 @@ async def push_queue(
 
 
 @router.get("/queue")
-async def pop_queue() -> Dict[str, Optional[str]]:
+async def pop_queue(_key: str = Depends(_verify_api_key)) -> Dict[str, Optional[str]]:
     """Frontend polls this every 2s. Returns next alert and removes it from queue."""
     try:
         return {"alert": _alert_queue.popleft()}

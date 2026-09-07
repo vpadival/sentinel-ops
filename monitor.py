@@ -27,6 +27,7 @@ REQUIREMENTS:
 """
 
 import argparse
+import os
 import time
 import re
 import json
@@ -34,6 +35,10 @@ import httpx
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Optional, Set
+from urllib.parse import unquote_plus
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Sentinel-Ops config ────────────────────────────────────────────────────
 SENTINEL_URL = "http://localhost:8000"
@@ -115,8 +120,6 @@ def submit_to_sentinel(problem_statement: str, dedupe_key: Optional[str] = None)
 
     if dedupe_key and dedupe_key in submitted_alerts:
         return
-    if dedupe_key:
-        submitted_alerts.add(dedupe_key)
 
     log(f"Pushing to Sentinel-Ops queue: {problem_statement[:80]}...", "ALERT")
 
@@ -124,13 +127,16 @@ def submit_to_sentinel(problem_statement: str, dedupe_key: Optional[str] = None)
         resp = httpx.post(
             f"{SENTINEL_URL}/api/v1/queue",
             json={"problem_statement": problem_statement},
+            headers={"X-API-Key": os.getenv("SENTINEL_API_KEY", "").strip()},
             timeout=5,
         )
         if resp.status_code == 202:
+            if dedupe_key:
+                submitted_alerts.add(dedupe_key)
             log(f"✓ Alert queued — will appear in dashboard at {SENTINEL_URL}", "OK")
         else:
             log(f"Sentinel-Ops returned {resp.status_code}", "WARN")
-    except httpx.ConnectError:
+    except httpx.RequestError:
         log("Cannot reach Sentinel-Ops. Is it running on port 8000?", "WARN")
 
 
@@ -189,17 +195,6 @@ def analyze_request(method: str, path: str, headers: Dict[str, str],
             f"User-Agent: {user_agent}",
             dedupe_key=f"ratelimit:{client_ip}"
         )
-
-    # ── 2. Failed auth tracking ────────────────────────────────────────────
-    if path in ("/login", "/admin", "/auth", "/signin", "/wp-login.php"):
-        failed_auth[client_ip] += 1
-        if failed_auth[client_ip] == BRUTE_FORCE_MAX:
-            submit_to_sentinel(
-                f"Brute force login attack from {client_ip}. "
-                f"{failed_auth[client_ip]} failed attempts on {path}. "
-                f"User-Agent: {user_agent}",
-                dedupe_key=f"bruteforce:{client_ip}"
-            )
 
     # ── 3. Pattern-based attack detection ─────────────────────────────────
     for attack_type, patterns in ATTACK_PATTERNS.items():
@@ -261,14 +256,15 @@ def run_proxy(target_url: str, listen_port: int):
     @app.route("/<path:path>",             methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
     def proxy(path: str):  # type: ignore[return]  # Flask route
         client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
-        body      = request.get_data(as_text=True)
+        raw_body  = request.get_data()
+        body      = raw_body.decode("utf-8", errors="replace")
         headers   = dict(request.headers)
 
         log(f"{request.method} /{path} from {client_ip}")
 
         analyze_request(
             method=request.method,
-            path="/" + path,
+            path=unquote_plus(request.full_path),
             headers=headers,
             body=body,
             client_ip=client_ip,
@@ -288,21 +284,36 @@ def run_proxy(target_url: str, listen_port: int):
                 method=request.method,
                 url=url,
                 headers=fwd_headers,
-                content=body.encode() if body else b"",
+                content=raw_body,
                 timeout=10,
-                follow_redirects=True,
+                follow_redirects=False,
             )
 
-            if resp.status_code in (401, 403) and "/" + path in ("/login", "/admin", "/auth"):
+            if resp.status_code in (401, 403) and "/" + path in (
+                "/login", "/admin", "/auth", "/signin", "/wp-login.php",
+            ):
                 failed_auth[client_ip] += 1
+                if failed_auth[client_ip] >= BRUTE_FORCE_MAX:
+                    submit_to_sentinel(
+                        f"Brute force login attack from {client_ip}. "
+                        f"{failed_auth[client_ip]} failed attempts on /{path}.",
+                        dedupe_key=f"bruteforce:{client_ip}",
+                    )
 
             return Response(
                 resp.content,
                 status=resp.status_code,
-                headers=dict(resp.headers),
+                headers=[
+                    (key, value) for key, value in resp.headers.multi_items()
+                    if key.lower() not in (
+                        "content-encoding", "content-length", "transfer-encoding",
+                        "connection", "keep-alive", "proxy-authenticate",
+                        "proxy-authorization", "te", "trailer", "upgrade",
+                    )
+                ],
             )
 
-        except httpx.ConnectError:
+        except httpx.RequestError:
             log(f"Cannot reach target {target_url}. Is your website running?", "WARN")
             return Response(
                 f"<h1>Monitor Error</h1><p>Cannot reach {target_url}. "

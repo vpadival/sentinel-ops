@@ -585,6 +585,7 @@ function App(){
   const[input,setInput]=useState('');
   const[busy,setBusy]=useState(false);
   const[err,setErr]=useState(null);
+  const[apiKey,setApiKey]=useState('');
   const pollRef=useRef(null);
 
   const pollJob=useCallback(async(jobId)=>{
@@ -606,15 +607,16 @@ function App(){
     setBusy(true);setErr(null);
     try{
       const r=await fetch(`${API}/api/v1/jobs`,{
-        method:'POST',headers:{'Content-Type':'application/json'},
+        method:'POST',headers:{'Content-Type':'application/json','X-API-Key':apiKey},
         body:JSON.stringify({problem_statement:input.trim()})
       });
       const d=await r.json();
+      if(!r.ok)throw new Error(typeof d.detail==='string'?d.detail:'Invalid alert. Enter 10–5000 characters.');
       const nj={id:d.job_id,status:'pending',problem:input.trim(),data:null};
       setJobs(p=>[nj,...p]);
       setSelId(d.job_id);setSelJob(null);setInput('');
       pollJob(d.job_id);
-    }catch{setErr('Backend unreachable. Is the server running?');}
+    }catch(error){setErr(error.message||'Backend unreachable. Is the server running?');}
     finally{setBusy(false);}
   };
 
@@ -644,15 +646,17 @@ function App(){
   useEffect(()=>{
     queueRef.current=setInterval(async()=>{
       try{
-        const r=await fetch(`${API}/api/v1/queue`);
+        const r=await fetch(`${API}/api/v1/queue`,{headers:{'X-API-Key':apiKey}});
+        if(!r.ok)return;
         const d=await r.json();
         if(d.alert){
           // Auto-submit the alert as a job
           const res=await fetch(`${API}/api/v1/jobs`,{
-            method:'POST',headers:{'Content-Type':'application/json'},
+            method:'POST',headers:{'Content-Type':'application/json','X-API-Key':apiKey},
             body:JSON.stringify({problem_statement:d.alert})
           });
           const job=await res.json();
+          if(!res.ok){setInput(d.alert);setErr('Auto-submit failed. The alert is saved in the input for retry.');return;}
           const nj={id:job.job_id,status:'pending',problem:d.alert,data:null};
           setJobs(p=>[nj,...p]);
           setSelId(job.job_id);setSelJob(null);
@@ -661,7 +665,7 @@ function App(){
       }catch{}
     },3000);
     return()=>clearInterval(queueRef.current);
-  },[pollJob]);
+  },[pollJob,apiKey]);
 
   const job=selJob;
   const isLive=job&&['pending','running','looping'].includes(job.status);
@@ -700,6 +704,9 @@ function App(){
         <aside className="left">
           <div className="submit-zone">
             <div className="panel-label">Submit Threat Alert</div>
+            <input type="password" aria-label="API key" placeholder="API key (if configured)"
+              value={apiKey} onChange={e=>setApiKey(e.target.value)} autoComplete="off"
+              style={{width:'100%',marginBottom:10,boxSizing:'border-box'}}/>
             <textarea className="threat-area"
               placeholder={"Describe the threat or paste raw alert data...\n\ne.g. SSH brute-force from 203.0.113.42, CVE-2023-38408 detected"}
               value={input}

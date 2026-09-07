@@ -62,7 +62,11 @@ def _build_graph() -> Any:
 
     # ── Wire edges ────────────────────────────────────────────────────────
     graph.set_entry_point("supervisor")
-    graph.add_edge("supervisor", "scout")
+    graph.add_conditional_edges(
+        "supervisor",
+        lambda state: END if state.get("job_status") == JobStatus.FAILED else "scout",
+        {END: END, "scout": "scout"},
+    )
     graph.add_edge("scout",      "analyst")
 
     graph.add_conditional_edges(

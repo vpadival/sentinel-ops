@@ -79,7 +79,8 @@ def start_agent_workflow(problem_statement: str) -> str:
             final_state: Dict[str, Any] = graph.invoke(thread_state)  # type: ignore[union-attr]
             # Merge final_state back into job_store atomically
             job_store.update(job_id, final_state)
-            job_store.set_status(job_id, JobStatus.COMPLETE)
+            if final_state.get("job_status") != JobStatus.FAILED:
+                job_store.set_status(job_id, JobStatus.COMPLETE)
         except Exception as exc:
             job_store.update(job_id, {
                 "job_status": JobStatus.FAILED,

@@ -34,7 +34,7 @@ class JobStore:
     def update(self, job_id: str, partial: Dict[str, Any]) -> None:
         with self._lock:
             if job_id in self._store:
-                self._store[job_id].update(partial)  # type: ignore[typeddict-item]
+                self._store[job_id].update(copy.deepcopy(partial))  # type: ignore[typeddict-item]
 
     def set_status(self, job_id: str, status: JobStatus) -> None:
         self.update(job_id, {"job_status": status})

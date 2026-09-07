@@ -170,6 +170,10 @@ pip install -r requirements.txt
 pip install pytest
 ```
 
+Omium tracing is optional. Install it with `pip install -r requirements-tracing.txt`.
+On Python 3.14 for Windows, its `grpcio-tools` dependency may require Microsoft
+C++ Build Tools. The application runs without the tracing SDK.
+
 ### 2. Configure environment
 
 ```bash
@@ -189,8 +193,11 @@ OMIUM_API_KEY=...              #  https://omium.ai
 
 ```bash
 python -m pytest tests/ -v
-# 104 passed
 ```
+
+Tests disable local `.env` loading and external service credentials, so the default
+suite exercises offline fallback behavior without sending notifications or using
+paid APIs.
 
 ### 4. Start the server
 
@@ -287,7 +294,11 @@ X-API-Key: your-key-here
 ### Poll queue (frontend auto-submit)
 ```bash
 GET /api/v1/queue
+X-API-Key: your-key-here      # required if SENTINEL_API_KEY is set
 ```
+
+Queue polling consumes an alert and therefore requires authentication when enabled.
+Enter the configured key in the dashboard's API key field; the monitor reads it from `.env`.
 
 ### Ingest webhook alert
 ```bash
