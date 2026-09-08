@@ -12,7 +12,7 @@ import json
 import time
 import logging
 from typing import Any, Dict, cast
-from groq import Groq
+from groq import Groq, APIStatusError, APIConnectionError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 _client: Groq | None = None
 
-PRIMARY_MODEL  = "llama-3.3-70b-versatile"
-FALLBACK_MODEL = "llama-3.1-8b-instant"
+PRIMARY_MODEL  = os.getenv("GROQ_PRIMARY_MODEL", "").strip() or "openai/gpt-oss-120b"
+FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "").strip() or "openai/gpt-oss-20b"
 
 MAX_RETRIES    = 3
 BACKOFF_BASE   = 3   # seconds
@@ -117,10 +117,13 @@ def call_llm(
     Falls back to smaller model if primary is unavailable.
     """
     client = _get_client()
+    failures: list[str] = []
+    attempts = 0
 
     for model in (PRIMARY_MODEL, FALLBACK_MODEL):
         for attempt in range(MAX_RETRIES):
             try:
+                attempts += 1
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -128,30 +131,49 @@ def call_llm(
                         {"role": "user",   "content": user},
                     ],
                     temperature=temperature,
-                    max_tokens=max_tokens,
+                    # Reasoning models share the completion budget with reasoning.
+                    max_tokens=max_tokens + 2048 if model.startswith("openai/gpt-oss-") else max_tokens,
+                    extra_body={"reasoning_effort": "low"} if model.startswith("openai/gpt-oss-") else {},
                 )
                 content = response.choices[0].message.content
                 return (content or "").strip()
 
             except Exception as exc:
-                err = str(exc).lower()
+                if isinstance(exc, APIConnectionError):
+                    raise RuntimeError("Cannot connect to Groq. Check network and proxy settings.") from exc
+                if not isinstance(exc, APIStatusError):
+                    raise
+                status = exc.status_code
+                body: Any = exc.body
+                error: Any = body.get("error", body) if isinstance(body, dict) else {}
+                code = error.get("code", "") if isinstance(error, dict) else ""
+                # Expose only a short machine-readable code, never raw response
+                # bodies (which may include credentials or submitted alert text).
+                code = code if isinstance(code, str) and re.fullmatch(r"[a-zA-Z0-9_]{1,80}", code) else "unknown"
+                detail = f"{model}: HTTP {status} ({code})"
 
-                # Rate limit → backoff and retry same model
-                if "rate" in err or "429" in err:
-                    wait = BACKOFF_BASE ** (attempt + 1)
-                    logger.warning(f"Rate limit on {model}, waiting {wait:.1f}s (attempt {attempt+1})")
-                    time.sleep(wait)
+                if status == 429:
+                    if attempt + 1 < MAX_RETRIES:
+                        wait = BACKOFF_BASE ** (attempt + 1)
+                        logger.warning("%s; retrying in %ss", detail, wait)
+                        time.sleep(wait)
+                    else:
+                        failures.append(detail + "; rate limit reached; check Groq usage limits.")
                     continue
+                if code in {"model_not_found", "model_decommissioned",
+                            "model_permission_blocked_org", "model_permission_blocked_project"}:
+                    failures.append(detail + "; check model availability and Groq project/organization permissions.")
+                    logger.warning("%s; trying the next configured model", detail)
+                    break
+                hint = {
+                    400: "Request rejected; check the model's supported parameters.",
+                    401: "Invalid API key; update GROQ_API_KEY and restart the backend.",
+                    403: "Access denied; check Groq project/organization permissions.",
+                    413: "Request too large; shorten the alert or evidence.",
+                }.get(status, "Groq request failed; check service status and account settings.")
+                raise RuntimeError(f"{detail}. {hint}") from exc
 
-                # Decommissioned/bad model → try fallback
-                if "decommission" in err or "model" in err or "400" in err:
-                    logger.warning(f"Model {model} unavailable, trying fallback.")
-                    break  # break inner loop → try next model
-
-                # Auth error or unknown → raise immediately
-                raise
-
-    raise RuntimeError(f"All Groq models failed after {MAX_RETRIES} retries.")
+    raise RuntimeError(f"Groq failed after {attempts} request attempt(s). " + " | ".join(failures))
 
 
 def call_llm_json(

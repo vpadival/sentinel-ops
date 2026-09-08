@@ -59,12 +59,13 @@ def test_monitor_retries_failed_alert_and_sends_key(monkeypatch):
     monkeypatch.setattr(monitor, "submitted_alerts", set())
     monkeypatch.setenv("SENTINEL_API_KEY", "test-secret")
     with patch("monitor.httpx.post", side_effect=[
-        httpx.ReadTimeout("timeout"), httpx.Response(202),
+        httpx.ReadTimeout("timeout"), httpx.Response(202, json={"job_id": "monitor-job"}),
     ]) as post:
         monitor.submit_to_sentinel("Test suspicious alert", "alert")
         monitor.submit_to_sentinel("Test suspicious alert", "alert")
         monitor.submit_to_sentinel("Test suspicious alert", "alert")
     assert post.call_count == 2
+    assert post.call_args.args[0].endswith("/api/v1/jobs")
     assert post.call_args.kwargs["headers"]["X-API-Key"] == "test-secret"
 
 

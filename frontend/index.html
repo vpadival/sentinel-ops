@@ -4,9 +4,6 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Sentinel-Ops | Neural Threat Command</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -277,9 +274,39 @@ body::before{content:'';position:fixed;inset:0;
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><p style="padding:32px">Loading Sentinel-Ops…</p></div>
+<noscript><p style="padding:32px">Enable JavaScript to use the dashboard.</p></noscript>
+<script>
+window.showStartupError=function(message){
+  const root=document.getElementById('root');
+  if(document.getElementById('app'))return;
+  root.textContent='Dashboard could not load. '+message+' Try Ctrl+Shift+R to reload.';
+  root.style.padding='32px';
+  root.setAttribute('role','alert');
+};
+window.addEventListener('error',function(event){
+  if(event.message)window.showStartupError(event.message);
+});
+</script>
+<script src="/static/vendor/react-18.2.0.min.js" onerror="showStartupError('React failed to load.')"></script>
+<script src="/static/vendor/react-dom-18.2.0.min.js" onerror="showStartupError('React DOM failed to load.')"></script>
+<script src="/static/vendor/babel-7.23.2.min.js" onerror="showStartupError('The script compiler failed to load.')"></script>
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback}=React;
+
+class DashboardBoundary extends React.Component{
+  constructor(props){super(props);this.state={error:null};}
+  static getDerivedStateFromError(error){return {error:String(error.message||error)};}
+  componentDidCatch(error,info){console.error('Dashboard rendering failed',error,info);}
+  render(){
+    if(this.state.error)return <div role="alert" style={{padding:32}}>
+      <h2>Dashboard could not display this data</h2>
+      <p style={{margin:'16px 0'}}>{this.state.error}</p>
+      <button onClick={()=>window.location.reload()}>Reload dashboard</button>
+    </div>;
+    return this.props.children;
+  }
+}
 
 const API='';
 const ago=ts=>{
@@ -338,7 +365,7 @@ function Pipeline({messages,spans,status}){
 
 function Messages({messages}){
   const endRef=useRef(null);
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:'smooth'}),[messages?.length]);
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'});},[messages?.length]);
   if(!messages?.length)return null;
   return(
     <div className="msgs-section">
@@ -623,7 +650,7 @@ function App(){
   const selectJob=async(jobId)=>{
     setSelId(jobId);
     const ex=jobs.find(j=>j.id===jobId);
-    if(ex?.data){setSelJob(ex.data);return;}
+    if(ex?.data&&['complete','failed'].includes(ex.data.status)){setSelJob(ex.data);return;}
     setSelJob(null);
     try{
       const r=await fetch(`${API}/api/v1/jobs/${jobId}`);
@@ -635,10 +662,25 @@ function App(){
   };
 
   useEffect(()=>{
-    fetch(`${API}/api/v1/jobs`).then(r=>r.json())
-      .then(d=>setJobs(d.map(j=>({id:j.job_id,status:j.status,problem:'',data:null}))))
-      .catch(()=>{});
-    return()=>{if(pollRef.current)clearInterval(pollRef.current);};
+    const refreshJobs=()=>fetch(`${API}/api/v1/jobs`).then(r=>{
+      if(!r.ok)throw new Error('Cannot load jobs');
+      return r.json();
+    }).then(d=>{
+      if(!Array.isArray(d))return;
+      setJobs(previous=>{
+        const existing=new Map(previous.map(j=>[j.id,j]));
+        const discovered=d.filter(j=>!existing.has(j.job_id)).reverse()
+          .map(j=>({id:j.job_id,status:j.status,problem:j.problem_statement||'',data:null}));
+        const latest=new Map(d.map(j=>[j.job_id,j]));
+        return [...discovered,...previous.map(j=>({...j,
+          status:latest.get(j.id)?.status||j.status,
+          problem:latest.get(j.id)?.problem_statement||j.problem
+        }))];
+      });
+    }).catch(()=>{});
+    refreshJobs();
+    const refreshTimer=setInterval(refreshJobs,3000);
+    return()=>{clearInterval(refreshTimer);if(pollRef.current)clearInterval(pollRef.current);};
   },[]);
 
   // ── Monitor.py queue polling — auto-submit alerts from the proxy ──────────
@@ -817,7 +859,7 @@ function App(){
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+ReactDOM.createRoot(document.getElementById('root')).render(<DashboardBoundary><App/></DashboardBoundary>);
 </script>
 </body>
 </html>

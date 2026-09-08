@@ -139,10 +139,14 @@ async def get_job(job_id: str) -> JobStatusResponse:
 
 @router.get("/jobs")
 async def list_jobs() -> List[Dict[str, Any]]:
-    """Debug endpoint: list all jobs and their statuses."""
+    """List job statuses and original alert descriptions for dashboard cards."""
     all_jobs = job_store.all_jobs()
     return [
-        {"job_id": jid, "status": s.get("job_status")}
+        {
+            "job_id": jid,
+            "status": s.get("job_status"),
+            "problem_statement": s.get("problem_statement", ""),
+        }
         for jid, s in all_jobs.items()
     ]
 

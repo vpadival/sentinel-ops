@@ -28,6 +28,7 @@ REQUIREMENTS:
 
 import argparse
 import os
+import threading
 import time
 import re
 import json
@@ -35,7 +36,7 @@ import httpx
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Optional, Set
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlsplit
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -96,6 +97,9 @@ ATTACK_PATTERNS: Dict[str, Optional[List[str]]] = {
 request_counts: Dict[str, List[float]]   = defaultdict(list)   # ip -> [timestamps]
 failed_auth: Dict[str, int]              = defaultdict(int)    # ip -> count
 submitted_alerts: Set[str]               = set()               # dedupe alerts
+_submitted_at: Dict[str, float] = {}
+_submit_lock = threading.Lock()
+ALERT_DEDUPE_SECONDS = 30
 
 # ── Thresholds ─────────────────────────────────────────────────────────────
 RATE_LIMIT_WINDOW   = 60    # seconds
@@ -111,31 +115,45 @@ def log(msg: str, level: str = "INFO") -> None:
     colors = {"INFO": "\033[36m", "WARN": "\033[33m", "ALERT": "\033[31m", "OK": "\033[32m"}
     reset = "\033[0m"
     c = colors.get(level, "")
-    print(f"{c}[{now()}] [{level}] {msg}{reset}")
+    print(f"{c}[{now()}] [{level}] {msg}{reset}", flush=True)
 
 
 # ── Sentinel-Ops integration ───────────────────────────────────────────────
 def submit_to_sentinel(problem_statement: str, dedupe_key: Optional[str] = None) -> None:
-    """Push alert to Sentinel-Ops queue — frontend will auto-fill and submit."""
+    """Create an investigation directly; no open browser is required."""
+    with _submit_lock:
+        _submit_alert(problem_statement, dedupe_key)
+
+
+def _submit_alert(problem_statement: str, dedupe_key: Optional[str]) -> None:
+    now_mono = time.monotonic()
+    for key in list(_submitted_at):
+        if now_mono - _submitted_at[key] >= ALERT_DEDUPE_SECONDS:
+            _submitted_at.pop(key)
+            submitted_alerts.discard(key)
 
     if dedupe_key and dedupe_key in submitted_alerts:
+        log("Duplicate alert suppressed for up to 30 seconds.", "INFO")
         return
 
-    log(f"Pushing to Sentinel-Ops queue: {problem_statement[:80]}...", "ALERT")
+    log(f"Starting Sentinel-Ops investigation: {problem_statement[:80]}...", "ALERT")
 
     try:
         resp = httpx.post(
-            f"{SENTINEL_URL}/api/v1/queue",
+            f"{SENTINEL_URL}/api/v1/jobs",
             json={"problem_statement": problem_statement},
             headers={"X-API-Key": os.getenv("SENTINEL_API_KEY", "").strip()},
             timeout=5,
         )
         if resp.status_code == 202:
+            job_id = resp.json()["job_id"]
             if dedupe_key:
                 submitted_alerts.add(dedupe_key)
-            log(f"✓ Alert queued — will appear in dashboard at {SENTINEL_URL}", "OK")
+                _submitted_at[dedupe_key] = time.monotonic()
+            log(f"Job created: {job_id}. Dashboard: {SENTINEL_URL}", "OK")
         else:
-            log(f"Sentinel-Ops returned {resp.status_code}", "WARN")
+            log(f"Sentinel-Ops returned HTTP {resp.status_code}; no job created. "
+                "For HTTP 401, check SENTINEL_API_KEY in .env.", "WARN")
     except httpx.RequestError:
         log("Cannot reach Sentinel-Ops. Is it running on port 8000?", "WARN")
 
@@ -234,6 +252,14 @@ def run_proxy(target_url: str, listen_port: int):
     Run a reverse proxy that sits in front of your website.
     All traffic goes through here so we can inspect it.
     """
+    target_url = target_url.rstrip("/")
+    target = urlsplit(target_url)
+    if target.scheme not in ("http", "https") or not target.hostname:
+        raise ValueError("Target must be an http:// or https:// website URL.")
+    target_port = target.port or (443 if target.scheme == "https" else 80)
+    if target.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and target_port == listen_port:
+        raise ValueError("Target port must differ from proxy port; forwarding to the proxy itself causes a request loop.")
+
     try:
         from flask import Flask, request, Response
         import flask_cors
@@ -241,7 +267,9 @@ def run_proxy(target_url: str, listen_port: int):
         log("flask and flask-cors are required. Install with: pip install flask flask-cors", "WARN")
         raise SystemExit(1)
 
-    app = Flask(__name__)
+    # Forward /static to the target as well; Flask's default static route would
+    # intercept dashboard assets and return 404 from the monitor directory.
+    app = Flask(__name__, static_folder=None)
     flask_cors.CORS(app)
 
     log(f"Starting monitor proxy on port {listen_port}", "INFO")
@@ -313,8 +341,8 @@ def run_proxy(target_url: str, listen_port: int):
                 ],
             )
 
-        except httpx.RequestError:
-            log(f"Cannot reach target {target_url}. Is your website running?", "WARN")
+        except httpx.RequestError as exc:
+            log(f"Target request failed: {type(exc).__name__}: {exc}. Target: {target_url}", "WARN")
             return Response(
                 f"<h1>Monitor Error</h1><p>Cannot reach {target_url}. "
                 f"Make sure your website is running.</p>",
@@ -326,14 +354,14 @@ def run_proxy(target_url: str, listen_port: int):
 
 
 # ── Attack simulator (for testing) ────────────────────────────────────────
-def run_simulator(interval: int = 5):
+def run_simulator(interval: int = 5, port: int = 9000):
     """
     Simulate various attacks against the monitor proxy for testing.
     interval: seconds to wait between each attack (default 5).
     """
     import httpx
 
-    TARGET = "http://localhost:9000"
+    TARGET = f"http://localhost:{port}"
 
     attacks = [
         ("Normal request",          "GET",  "/",             ""),
@@ -356,23 +384,33 @@ def run_simulator(interval: int = 5):
     log(f"Interval between attacks: {interval}s", "INFO")
     log("─" * 60)
 
-    client = httpx.Client(timeout=3)
+    failures = 0
+    # Detection may perform several five-second alert submissions before forwarding.
+    with httpx.Client(timeout=60, trust_env=False) as client:
+        for desc, method, path, body in attacks:
+            log(f"Simulating: {desc}")
+            try:
+                headers = {"Content-Type": "application/x-www-form-urlencoded"}
+                if "Scanner" in desc:
+                    headers["User-Agent"] = "Mozilla/5.0 (nikto scanner)"
 
-    for desc, method, path, body in attacks:
-        log(f"Simulating: {desc}")
-        try:
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            if "Scanner" in desc:
-                headers["User-Agent"] = "Mozilla/5.0 (nikto scanner)"
-
-            client.request(method, TARGET + path,
-                           content=body.encode(), headers=headers)
-        except Exception:
-            pass
-        time.sleep(interval)   # ← configurable interval
+                response = client.request(method, TARGET + path,
+                                          content=body.encode(), headers=headers)
+                log(f"{desc}: HTTP {response.status_code}",
+                    "WARN" if response.status_code >= 500 else "INFO")
+                if response.status_code >= 500:
+                    failures += 1
+            except httpx.ConnectError as exc:
+                log(f"Cannot connect to proxy at {TARGET}: {exc}. Keep the proxy running in a separate terminal.", "WARN")
+                return
+            except httpx.RequestError as exc:
+                failures += 1
+                log(f"{desc} failed: {type(exc).__name__}: {exc}", "WARN")
+            time.sleep(interval)
 
     log("─" * 60)
-    log("Simulation complete! Check Sentinel-Ops dashboard for alerts.", "OK")
+    log(f"Simulation finished with {failures} failed request(s). Check the proxy terminal for upstream errors.",
+        "WARN" if failures else "OK")
     log(f"Dashboard: {SENTINEL_URL}", "OK")
 
 
@@ -400,6 +438,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.simulate:
-        run_simulator(interval=args.interval)
+        run_simulator(interval=args.interval, port=args.port)
     else:
         run_proxy(args.target, args.port)

@@ -230,14 +230,32 @@ python monitor.py --target http://localhost:3000 --port 9000
 ### Run attack simulator (demo mode)
 
 ```bash
-# Terminal 1 — start proxy
+# Terminal 1 — start Sentinel-Ops and leave it running
+python main.py
+
+# Terminal 2 — start proxy and leave it running
 python monitor.py --target http://localhost:8000 --port 9000
 
-# Terminal 2 — simulate attacks
-python monitor.py --simulate
+# Terminal 3 — simulate attacks
+python monitor.py --simulate --port 9000
 ```
 
+The proxy does not start the target application. First check that
+`http://localhost:8000` opens directly, then open `http://localhost:9000`.
+Keep all three commands in separate terminals. If the proxy returns HTTP 502,
+check the target application's terminal; if port 9000 refuses the connection,
+check that the proxy process is still running. The simulator logs connection
+failures and HTTP response codes. HTTP 404/405 for simulated attack paths is
+expected when the target has no matching endpoint.
+
 Watch the Sentinel-Ops dashboard at `http://localhost:8000` — alerts auto-appear and agents investigate in real time.
+
+The monitor submits detected attacks directly to `/api/v1/jobs` and prints each
+created job ID in the **proxy terminal**. The dashboard refreshes its job list
+every three seconds; click a job to view its investigation. An open dashboard is
+not required to start analysis. Identical alerts are deduplicated for 30 seconds,
+after which repeating the simulator can create fresh investigations. Restart the
+proxy after updating `monitor.py` and hard-refresh the dashboard after frontend updates.
 
 ### Detected attack types
 
@@ -324,7 +342,7 @@ Response:
 {
   "status": "ok",
   "version": "0.7.0",
-  "models": { "primary": "llama-3.3-70b-versatile", "fallback": "llama-3.1-8b-instant" },
+  "models": { "primary": "openai/gpt-oss-120b", "fallback": "openai/gpt-oss-20b" },
   "keys": { "groq": true, "tavily": true, "discord": true, "omium": true },
   "jobs": { "total": 12, "complete": 10, "pending": 2 }
 }

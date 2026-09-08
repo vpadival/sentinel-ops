@@ -176,7 +176,8 @@ def test_health_returns_model_info():
     resp = client.get("/api/v1/health")
     data = resp.json()
     assert "models" in data
-    assert "llama" in data["models"]["primary"].lower()
+    from backend.core.llm import PRIMARY_MODEL, FALLBACK_MODEL
+    assert data["models"] == {"primary": PRIMARY_MODEL, "fallback": FALLBACK_MODEL}
 
 def test_health_returns_job_stats():
     resp = client.get("/api/v1/health")
