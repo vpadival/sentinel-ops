@@ -33,7 +33,9 @@ def _get_client() -> Groq:
         api_key = os.getenv("GROQ_API_KEY", "").strip()
         if not api_key:
             raise EnvironmentError("GROQ_API_KEY not set. Add it to your .env file.")
-        _client = Groq(api_key=api_key)
+        # Retry policy lives in call_llm; avoid nesting the SDK's retries and
+        # long default timeout inside each agent's retries.
+        _client = Groq(api_key=api_key, timeout=30.0, max_retries=0)
     return _client
 
 

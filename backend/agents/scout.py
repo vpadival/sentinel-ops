@@ -21,8 +21,8 @@ Respond ONLY with a JSON object:
   "anomaly_reason": "<one sentence describing the anomaly pattern>"
 }
 
-If no log lines are present in the input, synthesise what the logs would look like
-based on the described behaviour. Include at most 5 log lines.
+Copy only log lines actually present in the input, verbatim.
+If no log lines are present, return an empty raw_logs array. Never invent logs.
 Do NOT include any explanation outside the JSON object."""
 
 

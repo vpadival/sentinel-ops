@@ -75,10 +75,15 @@ def start_agent_workflow(problem_statement: str) -> str:
 
     def _run() -> None:
         try:
+            job_store.set_status(job_id, JobStatus.RUNNING)
             graph = get_graph()
-            final_state: Dict[str, Any] = graph.invoke(thread_state)  # type: ignore[union-attr]
-            # Merge final_state back into job_store atomically
-            job_store.update(job_id, final_state)
+            thread_state["job_status"] = JobStatus.RUNNING
+            final_state: Dict[str, Any] = {}
+            # Publish a snapshot after each node so polling can see progress
+            # while later agents are waiting on external services.
+            for snapshot in graph.stream(thread_state, stream_mode="values"):
+                final_state = dict(snapshot)
+                job_store.update(job_id, final_state)
             if final_state.get("job_status") != JobStatus.FAILED:
                 job_store.set_status(job_id, JobStatus.COMPLETE)
         except Exception as exc:

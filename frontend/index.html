@@ -477,36 +477,32 @@ function RightPanel({job}){
     </div>
   );
   const spans=job.trace_spans||[];
-  const maxDur=Math.max(...spans.map(s=>s.duration_ms||0),1);
   const logMatch=job.fact_sheet?.raw_markdown?.match(/```\n([\s\S]*?)```/);
-  const logs=logMatch?logMatch[1].trim():'';
+  const logs=job.evidence?.raw_logs ? job.evidence.raw_logs.join('\n') : (logMatch?logMatch[1].trim():'');
   const cves=job.context?.cve_matches||
     (job.fact_sheet?.raw_markdown?.match(/## CVE Matches\n([\s\S]*?)\n## /)?.[1]||'')
-      .split('\n').filter(l=>l.includes('CVE')).map(l=>l.replace(/^  - /,'').trim());
-  const intel=(job.fact_sheet?.raw_markdown?.match(/## Threat Intelligence\n([\s\S]*?)\n## /)?.[1]||'')
-    .split('\n').filter(l=>l.trim().startsWith('-')).map(l=>l.replace(/^  - \[.*?\] /,'').trim()).slice(0,3);
+      .split('\n').filter(l=>/CVE-\d{4}-\d+/.test(l)).map(l=>l.replace(/^  - /,'').trim());
+  const intel=job.context?.search_snippets||
+    (job.fact_sheet?.raw_markdown?.match(/## Threat Intelligence\n([\s\S]*?)\n## /)?.[1]||'')
+    .split('\n').filter(l=>l.trim().startsWith('-')&&!l.includes('No ')).map(l=>l.replace(/^\s*- /,'').trim());
 
   return(
     <div className="right">
       {spans.length>0&&(
         <div className="right-section">
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-            <div className="r-title" style={{marginBottom:0}}>Omium Trace Viewer</div>
+            <div className="r-title" style={{marginBottom:0}}>Agent Execution</div>
             <span style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--c2)',
               background:'rgba(0,255,136,.08)',border:'1px solid rgba(0,255,136,.2)',
-              borderRadius:2,padding:'2px 7px',letterSpacing:1}}>✓ SHIPPED</span>
+              borderRadius:2,padding:'2px 7px',letterSpacing:1}}>LOCAL TRACE</span>
           </div>
           <div style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,overflow:'hidden',marginBottom:10}}>
             <div style={{padding:'8px 12px',borderBottom:'1px solid var(--border)',
               display:'flex',justifyContent:'space-between',
               fontFamily:'var(--font-mono)',fontSize:9,color:'var(--txd)',letterSpacing:1}}>
-              <span>AGENT · OPERATION</span><span>TIMELINE</span><span>DURATION</span>
+              <span>AGENT · OPERATION</span><span>DURATION</span>
             </div>
             {spans.map((s,i)=>{
-              const totalDur=spans.reduce((a,b)=>a+(b.duration_ms||0),0);
-              const offset=spans.slice(0,i).reduce((a,b)=>a+(b.duration_ms||0),0);
-              const pct=Math.max((s.duration_ms/maxDur)*100,3);
-              const offPct=(offset/Math.max(totalDur,1))*100;
               return(
               <div key={i} style={{padding:'8px 12px',borderBottom:i<spans.length-1?'1px solid var(--border)':'',
                 background:s.error?'rgba(255,71,87,.04)':'transparent'}}>
@@ -525,25 +521,16 @@ function RightPanel({job}){
                     {(s.duration_ms||0).toFixed(0)}ms
                   </span>
                 </div>
-                <div style={{position:'relative',height:6,background:'var(--bg3)',borderRadius:2}}>
-                  <div style={{
-                    position:'absolute',left:`${offPct}%`,
-                    width:`${pct}%`,height:'100%',borderRadius:2,
-                    background:s.error
-                      ?'linear-gradient(90deg,#ff4757,#ff8c00)'
-                      :`linear-gradient(90deg,${AGENT_COLORS[s.agent]||'var(--c)'}99,${AGENT_COLORS[s.agent]||'var(--c)'})`
-                  }}/>
-                </div>
                 {s.error&&(
                   <div style={{marginTop:5,fontFamily:'var(--font-mono)',fontSize:9,
                     color:'var(--c3)',lineHeight:1.5}}>
-                    ⚠ {s.error.slice(0,80)}{s.error.length>80?'…':''}
+                    ⚠ {String(s.error)}
                   </div>
                 )}
                 {s.result&&!s.error&&(
                   <div style={{marginTop:4,fontFamily:'var(--font-mono)',fontSize:9,
                     color:'var(--txd)',lineHeight:1.5}}>
-                    → {String(s.result).slice(0,70)}{String(s.result).length>70?'…':''}
+                    → {String(s.result)}
                   </div>
                 )}
               </div>
@@ -564,21 +551,25 @@ function RightPanel({job}){
         </div>
       )}
 
-      {intel.length>0&&(
+      {(
         <div className="right-section">
           <div className="r-title">Threat Intel</div>
           {intel.map((s,i)=>(
-            <div className="intel-item" key={i}>{s.slice(0,180)}{s.length>180?'…':''}</div>
+            <div className="intel-item" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}} key={i}>{s}</div>
           ))}
+          {intel.length===0&&<div className="intel-item">No relevant external intelligence is available. Local/private IPs are not searched publicly; check the analyst trace for lookup errors.</div>}
         </div>
       )}
 
-      {Array.isArray(cves)&&cves.filter(Boolean).length>0&&(
+      {Array.isArray(cves)&&(
         <div className="right-section">
           <div className="r-title">CVE Matches</div>
           {cves.filter(Boolean).map((c,i)=>(
-            <div className="intel-item" key={i} style={{borderLeftColor:'rgba(255,165,2,.4)',color:'#ffa502'}}>{c}</div>
+            <div className="intel-item" key={i} style={{borderLeftColor:'rgba(255,165,2,.4)',color:'#ffa502',overflowWrap:'anywhere'}}>
+              {typeof c==='string'?c:`${c.id||'Unknown CVE'}: ${c.description||'No description supplied.'}`}
+            </div>
           ))}
+          {cves.length===0&&<div className="intel-item">No CVE matches were identified.</div>}
         </div>
       )}
 
@@ -590,8 +581,7 @@ function RightPanel({job}){
             ['Status', job.status?.toUpperCase()],
             ['Events', job.messages?.length||0],
             ['Spans', spans.length],
-            ['Omium Trace', spans.length>0?'✓ Shipped':'—'],
-            ['Discord Alert', job.fact_sheet?'✓ Fired':'—'],
+            ['Trace Storage', spans.length>0?'Local':'—'],
           ].map(([k,v])=>(
             <div key={k} style={{display:'flex',justifyContent:'space-between',
               fontFamily:'var(--font-mono)',fontSize:10,paddingBottom:2}}>
@@ -614,20 +604,24 @@ function App(){
   const[err,setErr]=useState(null);
   const[apiKey,setApiKey]=useState('');
   const pollRef=useRef(null);
+  const selectionRef=useRef(null);
 
   const pollJob=useCallback(async(jobId)=>{
+    selectionRef.current=jobId;
     if(pollRef.current)clearInterval(pollRef.current);
     pollRef.current=setInterval(async()=>{
       try{
         const r=await fetch(`${API}/api/v1/jobs/${jobId}`);
+        if(!r.ok)throw new Error(`Cannot refresh job (HTTP ${r.status})`);
         const d=await r.json();
+        if(selectionRef.current!==jobId)return;
         setJobs(prev=>prev.map(j=>j.id===jobId?{...j,status:d.status,data:d}:j));
         setSelId(jobId);
         setSelJob(d);
         if(['complete','failed'].includes(d.status))clearInterval(pollRef.current);
-      }catch{clearInterval(pollRef.current);}
+      }catch(error){if(selectionRef.current===jobId)setErr(error.message+'; retrying…');}
     },1000);
-  },[selId]);
+  },[]);
 
   const submit=async()=>{
     if(!input.trim()||busy)return;
@@ -648,17 +642,21 @@ function App(){
   };
 
   const selectJob=async(jobId)=>{
+    selectionRef.current=jobId;
+    if(pollRef.current)clearInterval(pollRef.current);
     setSelId(jobId);
     const ex=jobs.find(j=>j.id===jobId);
     if(ex?.data&&['complete','failed'].includes(ex.data.status)){setSelJob(ex.data);return;}
     setSelJob(null);
     try{
       const r=await fetch(`${API}/api/v1/jobs/${jobId}`);
+      if(!r.ok)throw new Error(`Cannot load job (HTTP ${r.status})`);
       const d=await r.json();
+      if(selectionRef.current!==jobId)return;
       setSelJob(d);
       setJobs(p=>p.map(j=>j.id===jobId?{...j,data:d}:j));
       if(!['complete','failed'].includes(d.status))pollJob(jobId);
-    }catch{}
+    }catch(error){if(selectionRef.current===jobId){setErr(error.message);pollJob(jobId);}}
   };
 
   useEffect(()=>{

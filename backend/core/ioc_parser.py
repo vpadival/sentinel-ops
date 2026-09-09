@@ -63,7 +63,9 @@ def extract_iocs(text: str, include_private_ips: bool = True) -> Dict[str, Any]:
     Returns:
         Dict with keys: ips, hashes, domains, cves, urls
     """
-    ips = list(dict.fromkeys(_IPV4.findall(text)))  # dedupe, preserve order
+    # User-agent product versions such as Chrome/152.0.0.0 are not IPs.
+    ip_text = re.sub(r'\b[A-Za-z][\w.-]*/\d+(?:\.\d+){2,}', '', text)
+    ips = list(dict.fromkeys(_IPV4.findall(ip_text)))  # dedupe, preserve order
     if not include_private_ips:
         ips = [ip for ip in ips if not _is_private_ip(ip)]
 

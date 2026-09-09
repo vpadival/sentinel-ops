@@ -10,6 +10,7 @@ from backend.core.state import SentinelState, JobStatus, AgentMessage, ThreatCon
 from backend.core.tracing import trace_span
 from backend.core.llm import call_llm_json
 from backend.core.search import search_threat_intel
+from backend.core.ioc_parser import extract_iocs
 
 CONFIDENCE_THRESHOLD = 0.6
 MAX_LOOPS = 3
@@ -48,7 +49,8 @@ def analyst_node(state: SentinelState) -> SentinelState:
         # ── Step 1: Tavily threat intel search ────────────────────────────
         search_targets = (
             evidence.get("matched_ips", []) +
-            evidence.get("matched_hashes", [])
+            evidence.get("matched_hashes", []) +
+            extract_iocs(state.get("problem_statement", ""))["cves"]
         )
         snippets = search_threat_intel(search_targets, max_results=2) if search_targets else []
 

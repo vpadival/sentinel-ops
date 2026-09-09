@@ -74,13 +74,13 @@ def reporter_node(state: SentinelState) -> SentinelState:
             span["error"] = str(exc)
 
         # ── Build sections ────────────────────────────────────────────────
-        intel_md = "\n".join(f"  - {s[:200]}" for s in snippets[:3]) or "  - No external intel gathered."
+        intel_md = "\n".join(f"  - {s}" for s in snippets) or "  - No relevant external intel gathered."
         cve_md   = "\n".join(
-            f"  - **{c.get('id','?')}**: {c.get('description','')[:100]}"
-            for c in cves[:3]
+            f"  - **{c.get('id','?')}**: {c.get('description','')}"
+            for c in cves
         ) or "  - No CVEs matched."
         mitre_md = "\n".join(f"- {t}" for t in mitre_raw) if mitre_raw else "- Unknown"
-        logs_md  = "\n".join(evidence.get("raw_logs", ["No logs captured"])[:4])
+        logs_md  = "\n".join(evidence.get("raw_logs", [])) or "No source log lines were supplied."
 
         # ── Phase 5: Smart recommendations using classified IPs ───────────
         recommendations: List[str] = []

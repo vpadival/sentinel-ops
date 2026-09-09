@@ -68,6 +68,8 @@ class JobStatusResponse(BaseModel):
     messages:    List[Any]     = []
     fact_sheet:  Optional[Dict[str, Any]] = None
     trace_spans: List[Any]     = []
+    evidence: Optional[Dict[str, Any]] = None
+    context: Optional[Dict[str, Any]] = None
 
 
 class WebhookAlertRequest(BaseModel):
@@ -127,6 +129,8 @@ async def get_job(job_id: str) -> JobStatusResponse:
     if not state:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
     fact_sheet = state.get("fact_sheet")
+    evidence = state.get("evidence")
+    context = state.get("context")
     return JobStatusResponse(
         job_id      = job_id,
         status      = state.get("job_status", JobStatus.PENDING),
@@ -134,6 +138,8 @@ async def get_job(job_id: str) -> JobStatusResponse:
         messages    = state.get("messages", []),
         fact_sheet  = dict(fact_sheet) if fact_sheet else None,
         trace_spans = state.get("trace_spans", []),
+        evidence    = dict(evidence) if evidence is not None else None,
+        context     = dict(context) if context is not None else None,
     )
 
 

@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 import os
 import logging
+import ipaddress
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,14 @@ def search_threat_intel(queries: List[str], max_results: int = 3) -> List[str]:
 
     snippets: List[str] = []
 
-    for query in queries:
+    for query in dict.fromkeys(queries):
         try:
-            full_query = f"threat intelligence cybersecurity {query}"
+            if not ipaddress.ip_address(query).is_global:
+                continue
+        except ValueError:
+            pass
+        try:
+            full_query = f'"{query}" threat intelligence cybersecurity'
             result = client.search(
                 query=full_query,
                 max_results=max_results,
@@ -61,8 +67,9 @@ def search_threat_intel(queries: List[str], max_results: int = 3) -> List[str]:
             for item in result.get("results", []):
                 content = item.get("content", "").strip()
                 url     = item.get("url", "")
-                if content:
-                    snippets.append(f"[{query}] {content[:300]} (source: {url})")
+                relevant_text = f"{content} {item.get('title', '')} {url}".lower()
+                if content and query.lower() in relevant_text:
+                    snippets.append(f"[{query}] {content} (source: {url})")
         except Exception as exc:
             logger.warning(f"Tavily search failed for '{query}': {exc}")
             continue

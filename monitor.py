@@ -290,13 +290,19 @@ def run_proxy(target_url: str, listen_port: int):
 
         log(f"{request.method} /{path} from {client_ip}")
 
-        analyze_request(
-            method=request.method,
-            path=unquote_plus(request.full_path),
-            headers=headers,
-            body=body,
-            client_ip=client_ip,
+        # The dashboard's own polling must not become a brute-force alert.
+        dashboard_poll = (
+            target_port == 8000 and request.method == "GET" and
+            (path in ("api/v1/health", "api/v1/jobs", "api/v1/queue") or path.startswith("api/v1/jobs/"))
         )
+        if not dashboard_poll:
+            analyze_request(
+                method=request.method,
+                path=unquote_plus(request.full_path),
+                headers=headers,
+                body=body,
+                client_ip=client_ip,
+            )
 
         try:
             url = f"{target_url}/{path}"
