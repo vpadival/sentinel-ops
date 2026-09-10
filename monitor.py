@@ -36,7 +36,7 @@ import httpx
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Optional, Set
-from urllib.parse import unquote_plus, urlsplit
+from urllib.parse import quote, unquote_plus, urlsplit
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -283,7 +283,8 @@ def run_proxy(target_url: str, listen_port: int):
     @app.route("/", defaults={"path": ""}, methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
     @app.route("/<path:path>",             methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
     def proxy(path: str):  # type: ignore[return]  # Flask route
-        client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
+        # This proxy accepts direct connections; forwarding headers are untrusted.
+        client_ip = request.remote_addr or "unknown"
         raw_body  = request.get_data()
         body      = raw_body.decode("utf-8", errors="replace")
         headers   = dict(request.headers)
@@ -305,14 +306,19 @@ def run_proxy(target_url: str, listen_port: int):
             )
 
         try:
-            url = f"{target_url}/{path}"
+            # Flask route parameters are decoded. Preserve the original escaping
+            # so %3F/%23 remain path data and %2F does not become a separator.
+            raw_uri = request.environ.get("RAW_URI") or request.environ.get("REQUEST_URI")
+            raw_path = raw_uri.split("?", 1)[0] if raw_uri else quote(request.path, safe="/")
+            url = f"{target_url}/{raw_path.lstrip('/')}"
             if request.query_string:
                 url += "?" + request.query_string.decode()
 
             fwd_headers = {
                 k: v for k, v in headers.items()
-                if k.lower() not in ("host", "content-length")
+                if k.lower() not in ("host", "content-length", "x-forwarded-for", "forwarded")
             }
+            fwd_headers["X-Forwarded-For"] = client_ip
 
             resp = httpx.request(
                 method=request.method,

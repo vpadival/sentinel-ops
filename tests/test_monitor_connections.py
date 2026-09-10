@@ -7,6 +7,35 @@ from flask import Flask
 import monitor
 
 
+@pytest.mark.parametrize("path", ["/files/a%3Fb%23c", "/files/a%2Fb", "/files/100%25"])
+def test_proxy_preserves_escaped_path(monkeypatch, path):
+    apps = []
+    monkeypatch.setattr(Flask, "run", lambda self, **kwargs: apps.append(self))
+    monitor.run_proxy("http://upstream/base", 9000)
+    with patch("monitor.analyze_request"), patch(
+        "monitor.httpx.request", return_value=httpx.Response(200)
+    ) as forward:
+        response = apps[0].test_client().get(path + "?q=a%26b")
+    assert response.status_code == 200
+    assert forward.call_args.kwargs["url"] == "http://upstream/base" + path + "?q=a%26b"
+
+
+def test_proxy_ignores_spoofed_forwarding_headers(monkeypatch):
+    apps = []
+    monkeypatch.setattr(Flask, "run", lambda self, **kwargs: apps.append(self))
+    monitor.run_proxy("http://upstream", 9000)
+    with patch("monitor.analyze_request") as analyze, patch(
+        "monitor.httpx.request", return_value=httpx.Response(200)
+    ) as forward:
+        apps[0].test_client().get("/", headers={
+            "X-Forwarded-For": "192.0.2.1", "Forwarded": "for=192.0.2.1",
+        })
+    assert analyze.call_args.kwargs["client_ip"] == "127.0.0.1"
+    headers = httpx.Headers(forward.call_args.kwargs["headers"])
+    assert headers["x-forwarded-for"] == "127.0.0.1"
+    assert "forwarded" not in headers
+
+
 def test_rejects_proxy_pointing_to_itself():
     with pytest.raises(ValueError, match="request loop"):
         monitor.run_proxy("http://localhost:9000", 9000)
